@@ -33,8 +33,8 @@
 <!-- Splash -->
 <div id="splash" class="layer">
   <div>Aberdeen Cat</div>
-  <button class="btn">Click to Start</button>
-  <div style="opacity:.7;font:14px system-ui">Simple splash — click anywhere</div>
+  <button class="btn">Click to start — press D to move forward</button>
+  <div style="opacity:.7;font:14px system-ui">A = left, D = right</div>
 </div>
 
 <!-- Intro video -->
@@ -53,7 +53,7 @@
 </div>
 
 <script>
-/* ---------- Filenames (as you provided) ---------- */
+/* ---------- Filenames ---------- */
 const FILES = {
   bg:   'bg.png',
   cat:  'cat.png',
@@ -82,7 +82,6 @@ function showIntro(){
   if (audioCtx.state === 'suspended') audioCtx.resume();
   splash.style.display = 'none';
   intro.style.display  = 'flex';
-  // Start music loop if decoded
   if (bgmBuffer){
     bgmNode = audioCtx.createBufferSource();
     bgmNode.buffer = bgmBuffer;
@@ -90,7 +89,7 @@ function showIntro(){
     bgmNode.connect(audioCtx.destination);
     bgmNode.start();
   }
-  video.play().catch(()=>{}); // if autoplay blocks, user can tap video
+  video.play().catch(()=>{});
 }
 splash.addEventListener('click', showIntro);
 
@@ -101,7 +100,7 @@ video.addEventListener('ended', () => {
   startGame();
 });
 
-/* ---------- Responsive canvas (keep aspect 16:9) ---------- */
+/* ---------- Responsive canvas ---------- */
 function fitCanvas(){
   const W = innerWidth, H = innerHeight;
   const target = Math.min(W, H * (800/450));
@@ -115,17 +114,22 @@ addEventListener('resize', fitCanvas);
 
 /* ---------- Game state ---------- */
 const state = {
-  scrollX:0, scrollSpeed:120,    // px/s
-  cat:{ x:160, y:308, w:150, h:100 }, // adjust if your cat.png needs it
+  // camera/world scroll; now controlled by keys
+  scrollX:0, scrollSpeed:0, maxSpeed:180, accel:600, // px/s, px/s^2
+  // player
+  cat:{ x:160, y:308, w:150, h:100, facing:1 }, // facing: 1=right, -1=left
+  // items
   items:[],
   totalToSpawn:40, spawned:0, picked:0,
-  spawnEveryMs:3500, nextSpawnAt:0,
+  spawnEveryMsBase:3400, // base cadence
+  nextSpawnAt:0,
   img:{ bg:null, cat:null, itemImgs:[] },
   lastT:0,
-  gameOverShown:false
+  gameOverShown:false,
+  keys:new Set()
 };
 
-/* ---------- Quotes for pickups (yours) ---------- */
+/* ---------- Quotes ---------- */
 const LINES = [
   "Jackpot! That’s some primo meowijuana.",
   "One man’s weed… is every cat’s weed.",
@@ -145,36 +149,44 @@ const LINES = [
 ];
 let lineIndex = 0;
 
+/* ---------- Input: A/D ---------- */
+addEventListener('keydown', e=>{
+  if (e.key === 'a' || e.key === 'A') state.keys.add('left');
+  if (e.key === 'd' || e.key === 'D') state.keys.add('right');
+});
+addEventListener('keyup', e=>{
+  if (e.key === 'a' || e.key === 'A') state.keys.delete('left');
+  if (e.key === 'd' || e.key === 'D') state.keys.delete('right');
+});
+
 /* ---------- Helpers ---------- */
 function loadImage(src){
   return new Promise((res,rej)=>{
-    const i=new Image();
-    i.onload=()=>res(i);
-    i.onerror=()=>rej(new Error('Image fail '+src));
-    i.src=src;
+    const i=new Image(); i.onload=()=>res(i); i.onerror=()=>rej(new Error('Image fail '+src)); i.src=src;
   });
 }
-
 function showBubble(text){
   bubble.textContent = text;
   bubble.style.display = 'block';
   clearTimeout(showBubble._t);
   showBubble._t = setTimeout(()=> bubble.style.display='none', 2000);
 }
-
 function aabb(a,b){ return a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y; }
 
-function spawnItem(){
+function spawnItem(now){
   const type = Math.floor(Math.random()*state.img.itemImgs.length);
-  const size = 48; // keep items consistent
+  const size = 48;
   const y = 340 + Math.floor(Math.random()*8 - 4);
   state.items.push({ x: canvas.width + 40, y, w:size, h:size, type, alive:true });
   state.spawned++;
+  // randomized spacing ≈ 2.8s–4.6s
+  const nextDelay = 2800 + Math.random()*1800;
+  state.nextSpawnAt = now + nextDelay;
 }
 
 function drawTiledBG(img, scrollX){
   const scaleY = canvas.height / img.height;
-  const drawW = img.width * scaleY;    // scale width to match height
+  const drawW = img.width * scaleY;
   let x = - (scrollX % drawW);
   while (x < canvas.width){
     ctx.drawImage(img, x, 0, drawW, canvas.height);
@@ -182,16 +194,25 @@ function drawTiledBG(img, scrollX){
   }
 }
 
+function drawCatFlippable(img, x, y, w, h, facing){
+  if (facing === 1) {
+    ctx.drawImage(img, x, y, w, h);
+  } else {
+    // flip horizontally around cat's left edge
+    ctx.save();
+    ctx.translate(x + w, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(img, 0, y, w, h);
+    ctx.restore();
+  }
+}
+
 function draw(){
   drawTiledBG(state.img.bg, state.scrollX);
-
-  // Items
   for(const it of state.items) if(it.alive){
     ctx.drawImage(state.img.itemImgs[it.type], it.x, it.y, it.w, it.h);
   }
-
-  // Cat (slides)
-  ctx.drawImage(state.img.cat, state.cat.x, state.cat.y, state.cat.w, state.cat.h);
+  drawCatFlippable(state.img.cat, state.cat.x, state.cat.y, state.cat.w, state.cat.h, state.cat.facing);
 
   // UI: score
   ctx.fillStyle='rgba(0,0,0,.5)';
@@ -200,7 +221,6 @@ function draw(){
   ctx.font='16px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
   ctx.fillText(`Picked: ${state.picked} / ${state.totalToSpawn}`, 20, 30);
 
-  // End banner
   if(state.picked >= state.totalToSpawn){
     ctx.fillStyle='rgba(0,0,0,.6)';
     ctx.fillRect(0, canvas.height/2-30, canvas.width, 60);
@@ -215,58 +235,68 @@ function draw(){
 /* ---------- Start game ---------- */
 async function startGame(){
   fitCanvas();
-
   if(!state.img.bg)  state.img.bg  = await loadImage(FILES.bg);
   if(!state.img.cat) state.img.cat = await loadImage(FILES.cat);
   if(!state.img.itemImgs.length){
     for(const p of FILES.items) state.img.itemImgs.push(await loadImage(p));
   }
-
   state.lastT = performance.now();
-  state.nextSpawnAt = state.lastT + 800; // first spawn shortly after start
+  state.nextSpawnAt = state.lastT + 800;
   requestAnimationFrame(loop);
 }
 
 /* ---------- Main loop ---------- */
 function loop(t){
-  const dt = Math.min(50, t - state.lastT); // clamp to avoid big jumps
+  const dt = Math.min(50, t - state.lastT); // ms
   state.lastT = t;
 
-  // Scroll world (background + items)
+  // Determine desired speed from input
+  let desired = 0;
+  if (state.keys.has('left'))  desired -= state.maxSpeed;
+  if (state.keys.has('right')) desired += state.maxSpeed;
+
+  // Flip facing based on input (remember last direction when stopped)
+  if (desired < 0) state.cat.facing = -1;
+  else if (desired > 0) state.cat.facing = 1;
+
+  // Accelerate toward desired speed
+  if (state.picked < state.totalToSpawn) {
+    const delta = desired - state.scrollSpeed;
+    const step = Math.sign(delta) * state.accel * (dt/1000);
+    if (Math.abs(step) > Math.abs(delta)) state.scrollSpeed = desired; else state.scrollSpeed += step;
+  } else {
+    // after all picked, slow to zero
+    const slow = 200 * (dt/1000);
+    if (Math.abs(state.scrollSpeed) <= slow) state.scrollSpeed = 0;
+    else state.scrollSpeed += -Math.sign(state.scrollSpeed) * slow;
+  }
+
+  // Apply scroll to world (background & items)
   const dx = (state.scrollSpeed * dt) / 1000;
   state.scrollX += dx;
   for(const it of state.items) it.x -= dx;
 
-  // Spawn cadence (~ every 3–4 seconds) until total reached
+  // Spawning cadence until total reached
   if(state.spawned < state.totalToSpawn && t >= state.nextSpawnAt){
-    spawnItem();
-    const jitter = 800 * (Math.random() - 0.5);
-    state.nextSpawnAt = t + state.spawnEveryMs + jitter;
+    spawnItem(t);
   }
 
-  // Collisions (when an item reaches the cat)
+  // Collisions
   for(const it of state.items) if(it.alive && aabb(state.cat, it)){
     it.alive = false;
     state.picked++;
 
-    // Show next quote
     const msg = LINES[lineIndex % LINES.length];
     lineIndex++;
     showBubble(msg);
 
-    // If that was the last nug, show your end line and stop showing quotes after
     if(state.picked >= state.totalToSpawn && !state.gameOverShown){
       setTimeout(()=>{
         bubble.textContent = "mitsy is too stoned to continue";
         bubble.style.display = 'block';
-      }, 250); // slight delay so it feels like a final beat
+      }, 250);
       state.gameOverShown = true;
     }
-  }
-
-  // Slow to a stop after finishing
-  if(state.picked >= state.totalToSpawn){
-    state.scrollSpeed = Math.max(0, state.scrollSpeed - 80 * (dt/1000));
   }
 
   // purge offscreen items
